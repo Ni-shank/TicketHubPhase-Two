@@ -1,0 +1,24 @@
+# Java build output
+**/target/
+**/build/
+
+# IDE files
+.idea/
+**/.idea/
+.vscode/
+**/.vscode/
+*.iml
+**/*.iml
+
+# Environment files and secrets
+.env
+.env.*
+!**/.env.example
+
+# Logs and temporary files
+*.log
+*.tmp
+
+# Operating system files
+.DS_Store
+Thumbs.db

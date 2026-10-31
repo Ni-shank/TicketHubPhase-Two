@@ -1,0 +1,388 @@
+
+services:
+
+  # =====================================================
+  # MYSQL DATABASE
+  # =====================================================
+  mysql:
+    image: mysql:8.0
+    container_name: tickethub-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: "root"
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'mysqladmin ping -h 127.0.0.1 -uroot -p"$${MYSQL_ROOT_PASSWORD}" --silent'
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+    networks:
+      - tickethub-network
+
+
+  # =====================================================
+  # KAFKA - KRAFT MODE
+  # =====================================================
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: tickethub-kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9094"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 30s
+    networks:
+      - tickethub-network
+
+
+  # =====================================================
+  # MAILHOG
+  # =====================================================
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    container_name: tickethub-mailhog
+    restart: unless-stopped
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    networks:
+      - tickethub-network
+
+
+  # =====================================================
+  # SERVICE REGISTRY - EUREKA
+  # =====================================================
+  service-registry:
+    image: tickethub/service-registry:1.0
+    container_name: tickethub-registry
+    restart: unless-stopped
+    ports:
+      - "8761:8761"
+    environment:
+      SERVER_PORT: 8761
+      EUREKA_HOSTNAME: service-registry
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - bash -c '</dev/tcp/127.0.0.1/8761'
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 40s
+    networks:
+      - tickethub-network
+
+
+  # =====================================================
+  # USER SERVICE
+  # =====================================================
+  user-service:
+    image: tickethub/user-service:1.0
+    container_name: tickethub-user
+    restart: unless-stopped
+    ports:
+      - "8089:8089"
+    environment:
+      SERVER_PORT: 8089
+
+      SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/tickethub_user_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: "root"
+
+      # User Service JWT configuration
+      APP_JWT_SECRET: "REPLACE_WITH_YOUR_EXISTING_JWT_SECRET"
+
+      # Admin credentials
+      APP_ADMIN_EMAIL: "admin@tickethub.com"
+      APP_ADMIN_PASSWORD: "REPLACE_WITH_YOUR_ADMIN_PASSWORD"
+
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - tickethub-network
+
+
+  # =====================================================
+  # TICKET HUB - EVENT SERVICE
+  # =====================================================
+  ticket-hub:
+    image: tickethub/ticket-hub:1.0
+    container_name: tickethub-events
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      SERVER_PORT: 8080
+
+      SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/ticket_hub_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: "root"
+
+      SPRING_FLYWAY_ENABLED: "true"
+
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - tickethub-network
+
+
+  # =====================================================
+  # PAYMENT SERVICE
+  # =====================================================
+  payment-service:
+    image: tickethub/payment-service:1.0
+    container_name: tickethub-payment
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      SERVER_PORT: 8081
+
+      SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/paymentdb?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: "root"
+
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+
+      # Direct Razorpay properties
+      RAZORPAY_KEY_ID: "REPLACE_WITH_YOUR_RAZORPAY_KEY_ID"
+      RAZORPAY_KEY_SECRET: "REPLACE_WITH_YOUR_RAZORPAY_KEY_SECRET"
+      RAZORPAY_WEBHOOK_SECRET: "REPLACE_WITH_YOUR_RAZORPAY_WEBHOOK_SECRET"
+
+      # payment.razorpay properties
+      PAYMENT_RAZORPAY_KEY_ID: "REPLACE_WITH_YOUR_RAZORPAY_KEY_ID"
+      PAYMENT_RAZORPAY_KEY_SECRET: "REPLACE_WITH_YOUR_RAZORPAY_KEY_SECRET"
+      PAYMENT_RAZORPAY_WEBHOOK_SECRET: "REPLACE_WITH_YOUR_RAZORPAY_WEBHOOK_SECRET"
+
+      # tickethub.payment.razorpay properties
+      TICKETHUB_PAYMENT_RAZORPAY_KEY_ID: "REPLACE_WITH_YOUR_RAZORPAY_KEY_ID"
+      TICKETHUB_PAYMENT_RAZORPAY_KEY_SECRET: "REPLACE_WITH_YOUR_RAZORPAY_KEY_SECRET"
+      TICKETHUB_PAYMENT_RAZORPAY_WEBHOOK_SECRET: "REPLACE_WITH_YOUR_RAZORPAY_WEBHOOK_SECRET"
+
+    depends_on:
+      mysql:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - tickethub-network
+
+
+  # =====================================================
+  # BOOKING SERVICE
+  # =====================================================
+  booking-service:
+    image: tickethub/booking-service:1.0
+    container_name: tickethub-booking
+    restart: unless-stopped
+    ports:
+      - "8083:8083"
+    environment:
+      SERVER_PORT: 8083
+
+      SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/bookingdb?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: "root"
+
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      BOOKING_KAFKA_ENABLED: "true"
+
+      # Booking Service JWT configuration
+      JWT_SECRET: "REPLACE_WITH_YOUR_EXISTING_JWT_SECRET"
+
+      EUREKA_ENABLED: "true"
+      EUREKA_URL: "http://service-registry:8761/eureka/"
+
+      EVENT_SERVICE_URL: "http://ticket-hub:8080"
+      PAYMENT_SERVICE_URL: "http://payment-service:8081"
+
+    depends_on:
+      mysql:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      service-registry:
+        condition: service_healthy
+      ticket-hub:
+        condition: service_started
+      payment-service:
+        condition: service_started
+    networks:
+      - tickethub-network
+
+
+  # =====================================================
+  # NOTIFICATION SERVICE
+  # =====================================================
+  notification-service:
+    image: tickethub/notification-service:1.0
+    container_name: tickethub-notification
+    restart: unless-stopped
+    ports:
+      - "8085:8085"
+    environment:
+      SERVER_PORT: 8085
+
+      DB_URL: "jdbc:mysql://mysql:3306/notificationdb?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: "root"
+
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      NOTIFICATION_KAFKA_ENABLED: "true"
+      NOTIFICATION_KAFKA_GROUP: notification-service
+
+      MAIL_HOST: mailhog
+      MAIL_PORT: 1025
+      MAIL_USERNAME: ""
+      MAIL_PASSWORD: ""
+      MAIL_SMTP_AUTH: "false"
+      MAIL_STARTTLS: "false"
+      SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_REQUIRED: "false"
+
+      MAIL_FROM: noreply@tickethub.local
+      MAIL_FROM_NAME: TicketHub
+      MAIL_SUPPORT: support@tickethub.local
+
+    depends_on:
+      mysql:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      mailhog:
+        condition: service_started
+    networks:
+      - tickethub-network
+
+
+  # =====================================================
+  # API GATEWAY
+  # =====================================================
+  api-gateway:
+    image: tickethub/api-gateway:1.0
+    container_name: tickethub-gateway
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    environment:
+      SERVER_PORT: 8090
+
+      # Gateway JWT configuration
+      JWT_SECRET: "REPLACE_WITH_YOUR_EXISTING_JWT_SECRET"
+
+      EUREKA_URL: "http://service-registry:8761/eureka/"
+      EUREKA_INSTANCE_HOSTNAME: api-gateway
+
+      USER_SERVICE_URI: "http://user-service:8089"
+      BOOKING_SERVICE_URI: "http://booking-service:8083"
+      EVENT_SERVICE_URI: "http://ticket-hub:8080"
+      PAYMENT_SERVICE_URI: "http://payment-service:8081"
+      NOTIFICATION_SERVICE_URI: "http://notification-service:8085"
+
+    depends_on:
+      service-registry:
+        condition: service_healthy
+      user-service:
+        condition: service_started
+      ticket-hub:
+        condition: service_started
+      booking-service:
+        condition: service_started
+      payment-service:
+        condition: service_started
+      notification-service:
+        condition: service_started
+    networks:
+      - tickethub-network
+
+
+  # =====================================================
+  # PROMETHEUS
+  # =====================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: tickethub-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    networks:
+      - tickethub-network
+
+
+  # =====================================================
+  # GRAFANA
+  # =====================================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: tickethub-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - tickethub-network
+
+
+# =====================================================
+# PERSISTENT STORAGE
+# =====================================================
+volumes:
+  mysql_data:
+  kafka_data:
+  prometheus_data:
+  grafana_data:
+
+
+# =====================================================
+# DOCKER NETWORK
+# =====================================================
+networks:
+  tickethub-network:
+    driver: bridge
